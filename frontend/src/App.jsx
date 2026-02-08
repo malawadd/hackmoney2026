@@ -151,11 +151,7 @@ function App() {
             <p className="footer-tagline">
               x402 payments for autonomous agents, powered by Yellow Network
             </p>
-            <div className="footer-tech">
-              <span>x402</span>
-              <span>USDC</span>
-              <span>Yellow Network</span>
-            </div>
+    
           </div>
           <div className="footer-nav">
             <div className="footer-col">
@@ -166,14 +162,11 @@ function App() {
             <div className="footer-col">
               <h4>Resources</h4>
               <a href="https://www.x402.org/" target="_blank" rel="noopener noreferrer">x402 Protocol</a>
-              <a href="https://github.com/ArcAgents/arcent" target="_blank" rel="noopener noreferrer">GitHub</a>
-              <a href="https://yellow.com/" target="_blank" rel="noopener noreferrer">Yellow Network</a>
+              <a href="https://yellow.org/" target="_blank" rel="noopener noreferrer">Yellow Network</a>
             </div>
           </div>
         </div>
-        <div className="footer-bottom">
-          <p>Open source x402 implementation on Yellow Network</p>
-        </div>
+        
       </div>
     </footer>
   );
@@ -190,7 +183,7 @@ function App() {
           <button className={`nav-btn ${currentView === 'agent' ? 'active' : ''}`} onClick={() => setCurrentView('agent')}>Agent Demo</button>
         </nav>
         <div className="wallet-section">
-          {wallet.isConnected ? (
+          {/* {wallet.isConnected ? (
             <div className="wallet-connected">
               {!wallet.isArcNetwork && (
                 <button className="btn-network" onClick={() => {
@@ -212,7 +205,7 @@ function App() {
               <span className="wallet-btn-disabled">Connect Wallet</span>
               <span className="wallet-coming-badge">Soon</span>
             </div>
-          )}
+          )} */}
         </div>
       </div>
     </header>
@@ -468,7 +461,7 @@ function App() {
                       </span>
                     </div>
                     <span className="demo-wallet-note">Pre-funded for demo</span>
-                    <button className="btn-add-funds" disabled>+ Add Funds <span className="soon-tag">Soon</span></button>
+                    {/* <button className="btn-add-funds" disabled>+ Add Funds <span className="soon-tag">Soon</span></button> */}
                   </div>
                 )}
               </div>
@@ -540,50 +533,7 @@ function App() {
             </div>
 
             {/* Spending Limits Card */}
-            {spendingLimits && (
-              <div className="neobrutalism-card">
-                <div className="card-header">
-                  <span className="card-title">Spending Controls</span>
-                  <span className="status-pill status-active">Configurable</span>
-                </div>
-                <div className="card-body">
-                  <div className="grid grid-cols-3 gap-6">
-                    {/* Daily */}
-                    <div>
-                      <div className="flex justify-between mb-4">
-                        <span className="demo-wallet-label">Daily</span>
-                        <span className="font-black">
-                          {spendingLimits.currentSpending?.daily} / {spendingLimits.limits?.daily}
-                        </span>
-                      </div>
-                      <span className="text-sm">{spendingLimits.remaining?.daily} remaining</span>
-                    </div>
-
-                    {/* Weekly */}
-                    <div>
-                      <div className="flex justify-between mb-4">
-                        <span className="demo-wallet-label">Weekly</span>
-                        <span className="font-black">
-                          {spendingLimits.currentSpending?.weekly} / {spendingLimits.limits?.weekly}
-                        </span>
-                      </div>
-                      <span className="text-sm">{spendingLimits.remaining?.weekly} remaining</span>
-                    </div>
-
-                    {/* Monthly */}
-                    <div>
-                      <div className="flex justify-between mb-4">
-                        <span className="demo-wallet-label">Monthly</span>
-                        <span className="font-black">
-                          {spendingLimits.currentSpending?.monthly} / {spendingLimits.limits?.monthly}
-                        </span>
-                      </div>
-                      <span className="text-sm">{spendingLimits.remaining?.monthly} remaining</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
+           
 
             {/* Agent Process Log */}
             {agentSteps.length > 0 && (
