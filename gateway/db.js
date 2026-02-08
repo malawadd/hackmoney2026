@@ -63,6 +63,7 @@ async function initDatabase() {
             CREATE TABLE IF NOT EXISTS yellow_transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT,
+                payment_id TEXT UNIQUE,
                 from_address TEXT,
                 to_address TEXT,
                 asset TEXT,
@@ -74,6 +75,7 @@ async function initDatabase() {
 
         await db.execute(`CREATE INDEX IF NOT EXISTS idx_yellow_sessions_status ON yellow_sessions(status)`);
         await db.execute(`CREATE INDEX IF NOT EXISTS idx_yellow_transactions_session ON yellow_transactions(session_id)`);
+        await db.execute(`CREATE INDEX IF NOT EXISTS idx_yellow_transactions_payment_id ON yellow_transactions(payment_id)`);
 
         console.log('[DB] Database tables initialized');
     } catch (error) {
@@ -296,15 +298,32 @@ export async function saveYellowSession(session) {
 }
 
 /**
+ * Check if Yellow payment has been used (replay prevention)
+ */
+export async function isYellowPaymentUsed(paymentId) {
+    try {
+        const result = await db.execute({
+            sql: `SELECT COUNT(*) as count FROM yellow_transactions WHERE payment_id = ?`,
+            args: [paymentId]
+        });
+        return result.rows[0]?.count > 0;
+    } catch (error) {
+        console.error('[DB] Failed to check Yellow payment:', error.message);
+        return false;
+    }
+}
+
+/**
  * Save Yellow Network transaction
  */
 export async function saveYellowTransaction(tx) {
     try {
         await db.execute({
-            sql: `INSERT INTO yellow_transactions (session_id, from_address, to_address, asset, amount, tx_type, timestamp)
-                  VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            sql: `INSERT INTO yellow_transactions (session_id, payment_id, from_address, to_address, asset, amount, tx_type, timestamp)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             args: [
                 tx.session_id,
+                tx.payment_id || `pay_${Date.now()}_${Math.random().toString(36).substring(7)}`,
                 tx.from,
                 tx.to,
                 tx.asset,
@@ -351,5 +370,6 @@ export default {
     getSpendingStatus,
     saveYellowSession,
     saveYellowTransaction,
+    isYellowPaymentUsed,
     getYellowSessionHistory
 };

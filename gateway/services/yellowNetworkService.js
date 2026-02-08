@@ -239,6 +239,79 @@ class YellowNetworkService extends EventEmitter {
     }
 
     /**
+     * Verify X-Yellow-Payment header
+     * @param {string} xYellowPaymentHeader - Base64 encoded payment proof
+     * @returns {Promise<{valid: boolean, amount?: string, sessionId?: string, paymentId?: string, error?: string}>}
+     */
+    async verifyPayment(xYellowPaymentHeader) {
+        try {
+            // Parse base64 header
+            const paymentData = JSON.parse(Buffer.from(xYellowPaymentHeader, 'base64').toString());
+            
+            const { session_id, payment_id, from, to, amount, asset, timestamp } = paymentData;
+            
+            if (!session_id || !payment_id || !amount) {
+                return { valid: false, error: 'Missing required payment fields' };
+            }
+            
+            // Check if session exists
+            const session = this.sessions.find(s => s.app_session_id === session_id);
+            if (!session) {
+                return { valid: false, error: 'Session not found' };
+            }
+            
+            // Check if session is open
+            if (session.status !== 'open') {
+                return { valid: false, error: 'Session is not open' };
+            }
+            
+            // In demo mode, validate basic structure
+            // In production, would verify signature and check ClearNode state
+            
+            return {
+                valid: true,
+                amount,
+                sessionId: session_id,
+                paymentId: payment_id,
+                from,
+                to,
+                asset: asset || 'usdc'
+            };
+        } catch (error) {
+            console.error('[Yellow Network] Payment verification error:', error);
+            return { valid: false, error: error.message };
+        }
+    }
+
+    /**
+     * Get or create session for agent
+     * @param {string} agentAddress - Agent wallet address
+     * @param {string} gatewayAddress - Gateway wallet address
+     * @param {string} initialAmount - Initial allocation amount
+     * @returns {Promise<Object>} Session object
+     */
+    async getOrCreateSessionForAgent(agentAddress, gatewayAddress, initialAmount = '1000000') {
+        // Check if session already exists for this agent
+        const existingSession = this.sessions.find(s => 
+            s.participants.includes(agentAddress) && 
+            s.participants.includes(gatewayAddress) &&
+            s.status === 'open'
+        );
+        
+        if (existingSession) {
+            console.log('[Yellow Network] Reusing existing session:', existingSession.app_session_id);
+            return existingSession;
+        }
+        
+        // Create new session
+        return await this.createAppSession({
+            participantA: agentAddress,
+            participantB: gatewayAddress,
+            amount: initialAmount
+        });
+    }
+
+    /**
      * Get connection status
      */
     getStatus() {
@@ -266,6 +339,8 @@ export default {
     createAppSession: (params) => yellowNetworkService.createAppSession(params),
     getSession: (sessionId) => yellowNetworkService.getSession(sessionId),
     executePayment: (params) => yellowNetworkService.executePayment(params),
+    verifyPayment: (header) => yellowNetworkService.verifyPayment(header),
+    getOrCreateSessionForAgent: (agentAddress, gatewayAddress, initialAmount) => yellowNetworkService.getOrCreateSessionForAgent(agentAddress, gatewayAddress, initialAmount),
     getStatus: () => yellowNetworkService.getStatus(),
     on: (event, callback) => yellowNetworkService.on(event, callback)
 };

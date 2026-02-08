@@ -1,0 +1,83 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Environment files (CRITICAL - contains API keys)
+.env
+.env.local
+.env.*.local
+*.env
+
+# Database files
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# IDE and Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Package manager locks (optional - uncomment if you want to include)
+# package-lock.json
+# yarn.lock
+
+# Presentation screenshots (keep only slides.html)
+presentation/*.png
+presentation/*.jpg
+presentation/*.jpeg
+presentation/*.gif
+presentation/*.webp
+
+# Private keys (extra safety)
+*.pem
+*.key
+*_rsa
+*_dsa
+*_ecdsa
+*_ed25519
+
+# Secrets
+*.secret
+.secrets/
+
+# Script outputs with sensitive data
+**/entity_secret_output.txt
+**/wallet_output.txt
+**/secret_*.txt

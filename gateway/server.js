@@ -12,7 +12,7 @@ import x402Client from './services/x402Client.js';
 import arcExecutor from './services/arcExecutor.js';
 import yellowNetwork from './services/yellowNetworkService.js';
 // SQLite persistence
-import { saveTransaction, persistProviderStats, loadProviderStats, getTransactionHistory, getDatabaseStats, getSpendingByPeriod, getSpendingStatus, saveYellowSession, saveYellowTransaction, getYellowSessionHistory } from './db.js';
+import { saveTransaction, persistProviderStats, loadProviderStats, getTransactionHistory, getDatabaseStats, getSpendingByPeriod, getSpendingStatus, saveYellowSession, saveYellowTransaction, isYellowPaymentUsed, getYellowSessionHistory } from './db.js';
 
 dotenv.config();
 
@@ -103,6 +103,109 @@ if (process.env.YELLOW_CLEARNODE_URL || process.env.YELLOW_WALLET_PRIVATE_KEY) {
     });
 } else {
     console.log('[Yellow Network] Not configured - running in demo mode');
+}
+
+// In-memory agent sessions for Yellow Network
+const agentYellowSessions = new Map(); // wallet address -> session_id
+
+/**
+ * Get or create Yellow Network session for agent
+ * @param {string} agentAddress - Agent wallet address
+ * @returns {Promise<string|null>} Session ID or null if Yellow not available
+ */
+async function getYellowSessionForAgent(agentAddress) {
+    if (!yellowNetwork.isAvailable()) {
+        return null;
+    }
+
+    // Check if agent already has a session
+    if (agentYellowSessions.has(agentAddress)) {
+        const sessionId = agentYellowSessions.get(agentAddress);
+        try {
+            // Verify session still exists
+            await yellowNetwork.getSession(sessionId);
+            return sessionId;
+        } catch (e) {
+            // Session expired or invalid, remove from cache
+            agentYellowSessions.delete(agentAddress);
+        }
+    }
+
+    // Create new session for agent
+    try {
+        const gatewayAddress = process.env.DEMO_WALLET_ADDRESS || '0x988530a4df2fe4590db57cfb8a6ad831c01c996a';
+        const session = await yellowNetwork.getOrCreateSessionForAgent(agentAddress, gatewayAddress, '10000000'); // 10 USDC allocation
+        await saveYellowSession(session);
+        agentYellowSessions.set(agentAddress, session.app_session_id);
+        return session.app_session_id;
+    } catch (error) {
+        console.error('[Server] Failed to create Yellow session for agent:', error);
+        return null;
+    }
+}
+
+/**
+ * Build enhanced 402 response with dual payment methods
+ * @param {object} api - API config
+ * @param {string} resource - Request path
+ * @param {string} agentAddress - Optional agent wallet address
+ * @returns {Promise<object>} Enhanced 402 response
+ */
+async function build402Response(api, resource, agentAddress = null) {
+    const priceUsdc = api.pricePerCall;
+    const priceWithDecimals = String(Math.round(priceUsdc * 1e6)); // Convert to 6 decimals
+
+    const response = {
+        x402Version: 1,
+        error: 'Payment Required',
+        message: `This API requires payment of $${priceUsdc} USDC per call`,
+        accepts: [{
+            scheme: 'exact',
+            network: 'arc-testnet',
+            maxAmountRequired: priceWithDecimals,
+            resource: resource,
+            description: `API call to ${api.name}`,
+            mimeType: 'application/json',
+            payTo: api.ownerWallet,
+            maxTimeoutSeconds: 60,
+            asset: arcVerifier.ARC_CONFIG.usdc
+        }],
+        payment_methods: {
+            arc_network: {
+                recipient: api.ownerWallet,
+                chain_id: 5042002,
+                estimated_gas: '0.001',
+                amount: priceUsdc,
+                network: 'arc-testnet'
+            }
+        }
+    };
+
+    // Add Yellow Network option if available
+    if (yellowNetwork.isAvailable()) {
+        let sessionId = null;
+        if (agentAddress) {
+            sessionId = await getYellowSessionForAgent(agentAddress);
+        }
+
+        response.payment_methods.yellow_network = {
+            participant: api.ownerWallet,
+            asset: 'usdc',
+            amount: priceUsdc,
+            instant: true,
+            gas_free: true,
+            session_id: sessionId,
+            session_required: !sessionId,
+            create_session_endpoint: '/yellow/session/create'
+        };
+
+        // Recommend Yellow if session exists
+        if (sessionId) {
+            response.recommended = 'yellow_network';
+        }
+    }
+
+    return response;
 }
 
 // In-memory storage (use Redis/DB in production)
@@ -306,29 +409,96 @@ app.all('/proxy/:apiId', async (req, res) => {
         return res.status(404).json({ error: 'API not found' });
     }
 
-    // Check for x402 payment header
+    // Check for X-Yellow-Payment header first
+    const xYellowPaymentHeader = req.headers['x-yellow-payment'];
+    
+    if (xYellowPaymentHeader) {
+        try {
+            const verification = await yellowNetwork.verifyPayment(xYellowPaymentHeader);
+            
+            if (!verification.valid) {
+                return res.status(402).json({
+                    error: 'Invalid Yellow Network payment',
+                    details: verification.error
+                });
+            }
+
+            // Check for replay
+            if (verification.paymentId) {
+                const alreadyUsed = await isYellowPaymentUsed(verification.paymentId);
+                if (alreadyUsed) {
+                    return res.status(402).json({
+                        error: 'Payment already used'
+                    });
+                }
+            }
+
+            // Mark transaction as used
+            await saveYellowTransaction({
+                session_id: verification.sessionId,
+                payment_id: verification.paymentId,
+                from: verification.from,
+                to: verification.to,
+                asset: verification.asset,
+                amount: verification.amount
+            });
+
+            // Update API stats
+            api.totalCalls += 1;
+            api.totalEarnings += parseFloat(verification.amount);
+
+            // Forward request to target API
+            try {
+                const targetHeaders = { ...req.headers };
+                delete targetHeaders['x-yellow-payment'];
+                delete targetHeaders['host'];
+
+                const targetResponse = await fetch(api.targetUrl, {
+                    method: req.method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        ...targetHeaders
+                    },
+                    body: req.method !== 'GET' ? JSON.stringify(req.body) : undefined
+                });
+
+                const data = await targetResponse.json();
+
+                // Return response with payment confirmation
+                return res.json({
+                    _x402: {
+                        paid: true,
+                        amount: verification.amount,
+                        sessionId: verification.sessionId,
+                        paymentId: verification.paymentId,
+                        paymentMethod: 'yellow_network'
+                    },
+                    data
+                });
+            } catch (fetchError) {
+                return res.json({
+                    _x402: {
+                        paid: true,
+                        amount: verification.amount,
+                        sessionId: verification.sessionId,
+                        paymentMethod: 'yellow_network'
+                    },
+                    data: { message: 'Target API response (demo)' }
+                });
+            }
+        } catch (error) {
+            return res.status(400).json({ error: 'Invalid Yellow payment header format' });
+        }
+    }
+
+    // Check for x402 payment header (Arc Network)
     const paymentHeader = req.headers['x-payment'];
 
     if (!paymentHeader) {
-        // Return 402 Payment Required with x402 spec
-        return res.status(402).json({
-            error: 'Payment Required',
-            message: `This API requires payment of $${api.pricePerCall} USDC per call`,
-            x402: {
-                version: '1.0',
-                accepts: [{
-                    scheme: 'exact',
-                    network: 'arc-testnet',
-                    maxAmountRequired: String(Math.round(api.pricePerCall * 1e6)),
-                    resource: req.originalUrl,
-                    description: `API call to ${api.name}`,
-                    mimeType: 'application/json',
-                    payTo: api.ownerWallet,
-                    maxTimeoutSeconds: 60,
-                    asset: arcVerifier.ARC_CONFIG.usdc
-                }]
-            }
-        });
+        // Return 402 Payment Required with dual payment methods
+        const agentAddress = req.headers['x-agent-address'];
+        const response = await build402Response(api, req.originalUrl, agentAddress);
+        return res.status(402).json(response);
     }
 
     // Verify payment
@@ -414,7 +584,8 @@ app.all('/proxy/:apiId', async (req, res) => {
                     amount: verificationResult.actualAmount,
                     txHash,
                     verified: !verificationResult.simulated,
-                    explorerUrl: `${arcVerifier.ARC_CONFIG.explorer}/tx/${txHash.replace('arc:', '')}`
+                    explorerUrl: `${arcVerifier.ARC_CONFIG.explorer}/tx/${txHash.replace('arc:', '')}`,
+                    paymentMethod: 'arc_network'
                 },
                 data
             });
@@ -425,7 +596,8 @@ app.all('/proxy/:apiId', async (req, res) => {
                     amount: verificationResult.actualAmount,
                     txHash,
                     verified: !verificationResult.simulated,
-                    explorerUrl: `${arcVerifier.ARC_CONFIG.explorer}/tx/${txHash.replace('arc:', '')}`
+                    explorerUrl: `${arcVerifier.ARC_CONFIG.explorer}/tx/${txHash.replace('arc:', '')}`,
+                    paymentMethod: 'arc_network'
                 },
                 data: { message: 'Target API response (demo)' }
             });
@@ -899,7 +1071,173 @@ REASON: [one sentence explanation]`;
                 });
             }
 
-            // Step 5: Sign payment authorization (HOLD - don't execute yet)
+            // Step 5: Check if Yellow Network payment is available and recommended
+            const useYellow = paymentInfo.payment_methods?.yellow_network && 
+                             yellowNetwork.isAvailable() &&
+                             paymentInfo.recommended === 'yellow_network';
+
+            let paymentMethod = 'arc_network';
+            let paymentStartTime = Date.now();
+
+            if (useYellow) {
+                // ============================================
+                // YELLOW NETWORK PATH: Instant off-chain payment
+                // ============================================
+                addStep('payment_method', 'Using Yellow Network (instant, zero gas)', {
+                    method: 'yellow_network',
+                    gasless: true,
+                    instant: true
+                });
+
+                try {
+                    let sessionId = paymentInfo.payment_methods.yellow_network.session_id;
+
+                    // Create session if needed
+                    if (!sessionId) {
+                        addStep('session_creating', 'Creating Yellow Network session...');
+                        const session = await yellowNetwork.getOrCreateSessionForAgent(
+                            wallet.address,
+                            paymentInfo.payment_methods.arc_network.recipient,
+                            '10000000' // 10 USDC allocation
+                        );
+                        sessionId = session.app_session_id;
+                        await saveYellowSession(session);
+                        addStep('session_created', `Session created: ${sessionId.slice(0, 16)}...`);
+                    }
+
+                    // Execute off-chain payment
+                    addStep('payment_executing', 'Executing off-chain payment...');
+                    const payment = await yellowNetwork.executePayment({
+                        sessionId: sessionId,
+                        from: wallet.address,
+                        to: paymentInfo.payment_methods.arc_network.recipient,
+                        asset: 'usdc',
+                        amount: String(requiredAmount)
+                    });
+
+                    const paymentLatency = Date.now() - paymentStartTime;
+                    paymentMethod = 'yellow_network';
+
+                    addStep('payment_success', 'Off-chain payment complete', {
+                        paymentId: payment.id,
+                        sessionId: sessionId,
+                        amount: `$${requiredAmount}`,
+                        latencyMs: paymentLatency,
+                        gasless: true
+                    });
+
+                    // Build X-Yellow-Payment header
+                    const yellowPaymentHeader = Buffer.from(JSON.stringify({
+                        session_id: sessionId,
+                        payment_id: payment.id,
+                        from: wallet.address,
+                        to: paymentInfo.payment_methods.arc_network.recipient,
+                        amount: String(requiredAmount),
+                        asset: 'usdc',
+                        timestamp: Date.now()
+                    })).toString('base64');
+
+                    // Retry API with X-Yellow-Payment
+                    addStep('service_executing', 'Calling API with Yellow payment proof...');
+                    const serviceStart = Date.now();
+
+                    const serviceResponse = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Yellow-Payment': yellowPaymentHeader
+                        },
+                        body: JSON.stringify(requestBody)
+                    });
+                    const serviceLatency = Date.now() - serviceStart;
+
+                    if (!serviceResponse.ok) {
+                        const errorData = await serviceResponse.json().catch(() => ({}));
+                        addStep('service_failed', 'API failed', {
+                            status: serviceResponse.status,
+                            latencyMs: serviceLatency
+                        });
+                        updateProviderStats(selectedApi, false, serviceLatency);
+
+                        return res.json({
+                            success: false,
+                            steps,
+                            result: {
+                                task,
+                                output: null,
+                                paid: false,
+                                reason: errorData.error || 'Service failed',
+                                paymentMethod: 'yellow_network'
+                            }
+                        });
+                    }
+
+                    const apiResult = await serviceResponse.json();
+                    addStep('service_success', 'API service completed', {
+                        latencyMs: serviceLatency,
+                        status: 200
+                    });
+                    updateProviderStats(selectedApi, true, serviceLatency);
+
+                    // Save transaction
+                    await saveTransaction({
+                        timestamp: new Date().toISOString(),
+                        provider: selectedApi,
+                        serviceType: 'x402-payment-yellow',
+                        amount: requiredAmount.toString(),
+                        txHash: payment.id,
+                        status: 'success',
+                        latencyMs: paymentLatency,
+                        agentId: process.env.AGENT_WALLET_ID || 'demo-agent',
+                        query: task
+                    });
+
+                    const totalLatency = Date.now() - paymentStartTime;
+                    const estimatedArcGas = 0.001;
+                    const estimatedArcTime = 1500;
+
+                    return res.json({
+                        success: true,
+                        steps,
+                        result: {
+                            task,
+                            output: apiResult.result || apiResult,
+                            paid: true,
+                            amount: `$${requiredAmount}`,
+                            paymentId: payment.id,
+                            sessionId: sessionId,
+                            paymentMethod: 'yellow_network',
+                            isReal: true,
+                            instant: true,
+                            gasless: true
+                        },
+                        agent: {
+                            totalSpent: `$${requiredAmount}`,
+                            remainingBudget: `$${(budget - requiredAmount).toFixed(4)}`,
+                            decisions: steps.filter(s => s.type === 'decision_made').length
+                        },
+                        savingsEstimate: {
+                            gasSaved: estimatedArcGas.toString(),
+                            timeSavedMs: Math.max(0, estimatedArcTime - totalLatency),
+                            method: 'yellow_vs_arc'
+                        }
+                    });
+
+                } catch (yellowError) {
+                    addStep('error', `Yellow payment failed: ${yellowError.message}. Falling back to Arc...`);
+                    // Fall through to Arc payment
+                }
+            }
+
+            // ============================================
+            // ARC NETWORK PATH: Traditional on-chain payment
+            // ============================================
+            addStep('payment_method', 'Using Arc Network (on-chain)', {
+                method: 'arc_network',
+                gasEstimate: '0.001 USDC'
+            });
+
+            // Step 6: Sign payment authorization (HOLD - don't execute yet)
             addStep('signing', 'Preparing payment authorization...');
 
             try {
@@ -1092,7 +1430,8 @@ REASON: [one sentence explanation]`;
                             explorerUrl: txResult.explorerUrl,
                             network: 'Arc Testnet',
                             isReal: true,
-                            atomicSettlement: true
+                            atomicSettlement: true,
+                            paymentMethod: 'arc_network'
                         },
                         agent: {
                             totalSpent: `$${totalSpent}`,
@@ -1259,14 +1598,75 @@ const arcX402Middleware = (recipientAddress, routeConfig) => {
             return next();
         }
 
-        // Check for X-PAYMENT header
+        // Check for X-Yellow-Payment header first
+        const xYellowPaymentHeader = req.headers['x-yellow-payment'];
+        
+        if (xYellowPaymentHeader) {
+            // Verify Yellow Network payment
+            try {
+                const verification = await yellowNetwork.verifyPayment(xYellowPaymentHeader);
+                
+                if (!verification.valid) {
+                    return res.status(402).json({
+                        error: 'Invalid Yellow Network payment',
+                        details: verification.error
+                    });
+                }
+
+                // Check if payment was already used (replay prevention)
+                if (verification.paymentId) {
+                    const alreadyUsed = await isYellowPaymentUsed(verification.paymentId);
+                    if (alreadyUsed) {
+                        return res.status(402).json({
+                            error: 'Payment already used',
+                            details: 'This payment has been processed before'
+                        });
+                    }
+                }
+
+                // Payment valid - save to DB and allow request
+                console.log(`[Arc x402] Yellow payment validated: $${verification.amount} USDC`);
+                await saveYellowTransaction({
+                    session_id: verification.sessionId,
+                    payment_id: verification.paymentId,
+                    from: verification.from,
+                    to: verification.to,
+                    asset: verification.asset,
+                    amount: verification.amount
+                });
+
+                req.x402Payment = {
+                    source: 'yellow',
+                    valid: true,
+                    actualAmount: parseFloat(verification.amount),
+                    sessionId: verification.sessionId,
+                    paymentId: verification.paymentId
+                };
+                
+                return next();
+            } catch (error) {
+                return res.status(402).json({
+                    error: `Yellow payment verification failed: ${error.message}`
+                });
+            }
+        }
+
+        // Check for X-PAYMENT header (Arc Network)
         const xPaymentHeader = req.headers['x-payment'];
 
         if (!xPaymentHeader) {
-            // Return 402 Payment Required
-            return res.status(402).json({
+            // Return 402 Payment Required with dual payment methods
+            const agentAddress = req.headers['x-agent-address']; // Optional agent identifier
+            let sessionId = null;
+            
+            if (agentAddress && yellowNetwork.isAvailable()) {
+                sessionId = await getYellowSessionForAgent(agentAddress);
+            }
+
+            const response = {
                 x402Version: 1,
-                error: 'X-PAYMENT header is required',
+                error: 'Payment required',
+                message: `API Access: ${routeKey} - $${config.price} USDC`,
                 accepts: [{
                     scheme: 'exact',
                     network: 'arc-testnet',
@@ -1278,8 +1678,37 @@ const arcX402Middleware = (recipientAddress, routeConfig) => {
                     maxTimeoutSeconds: 600,
                     asset: arcVerifier.ARC_CONFIG.usdc,
                     price: config.priceDisplay
-                }]
-            });
+                }],
+                payment_methods: {
+                    arc_network: {
+                        recipient: recipientAddress,
+                        chain_id: 5042002,
+                        estimated_gas: '0.001',
+                        amount: config.price,
+                        network: 'arc-testnet'
+                    }
+                }
+            };
+
+            // Add Yellow Network option if available
+            if (yellowNetwork.isAvailable()) {
+                response.payment_methods.yellow_network = {
+                    participant: recipientAddress,
+                    asset: 'usdc',
+                    amount: config.price,
+                    instant: true,
+                    gas_free: true,
+                    session_id: sessionId,
+                    session_required: !sessionId,
+                    create_session_endpoint: '/yellow/session/create'
+                };
+
+                if (sessionId) {
+                    response.recommended = 'yellow_network';
+                }
+            }
+
+            return res.status(402).json(response);
         }
 
         // Validate payment using Arc facilitator
@@ -1708,6 +2137,40 @@ app.get('/yellow/sessions', async (req, res) => {
     try {
         const sessions = await getYellowSessionHistory(50);
         res.json({ success: true, count: sessions.length, sessions });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// Get Yellow Network stats
+app.get('/yellow/stats', async (req, res) => {
+    try {
+        // Get all Yellow transactions from DB
+        const allTransactions = await getTransactionHistory(1000);
+        const yellowTransactions = allTransactions.filter(tx => tx.service_type === 'x402-payment-yellow');
+        
+        // Calculate stats
+        const totalYellowPayments = yellowTransactions.length;
+        const totalGasSaved = (totalYellowPayments * 0.001).toFixed(4); // Estimated $0.001 gas per Arc tx
+        const avgYellowLatency = yellowTransactions.length > 0 
+            ? Math.round(yellowTransactions.reduce((sum, tx) => sum + (tx.latency_ms || 0), 0) / yellowTransactions.length)
+            : 0;
+        const avgArcLatency = 1500; // Estimated Arc tx latency
+        const totalTimeSaved = Math.max(0, (avgArcLatency - avgYellowLatency) * totalYellowPayments);
+        
+        // Get active sessions
+        const sessions = await getYellowSessionHistory(1000);
+        const activeSessions = sessions.filter(s => s.status === 'open').length;
+        
+        res.json({
+            success: true,
+            yellowPayments: totalYellowPayments,
+            totalGasSaved,
+            totalTimeSaved,
+            sessionsActive: activeSessions,
+            avgLatencyMs: avgYellowLatency,
+            estimatedArcLatency: avgArcLatency
+        });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
