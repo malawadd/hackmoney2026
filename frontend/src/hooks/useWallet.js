@@ -1,11 +1,11 @@
-// useWallet Hook - MetaMask connection for Arc blockchain
+// useWallet Hook - MetaMask connection for blockchain
 import { useState, useEffect, useCallback } from 'react';
 import { ethers } from 'ethers';
 
-// Arc Testnet Configuration
+// Testnet Configuration
 const ARC_TESTNET = {
     chainId: '0x4cef52', // 5042002 in hex (correct!)
-    chainName: 'Arc Testnet',
+    chainName: 'Testnet',
     nativeCurrency: {
         name: 'USD Coin',
         symbol: 'USDC',

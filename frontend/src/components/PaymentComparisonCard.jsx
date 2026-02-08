@@ -1,30 +1,30 @@
 import './PaymentComparisonCard.css';
 
 function PaymentComparisonCard({ paymentMethod, apiPrice, gasSaved, timeSavedMs }) {
-    if (!paymentMethod || paymentMethod === 'arc_network') {
+    if (!paymentMethod || paymentMethod === 'onchain' || paymentMethod === 'arc_network') {
         return null; // Only show when Yellow was used
     }
 
-    const arcGas = 0.001;
-    const arcTime = 1500; // ms
-    const yellowTime = Math.max(100, arcTime - (timeSavedMs || 0));
+    const onchainGas = 0.001;
+    const onchainTime = 1500; // ms
+    const yellowTime = Math.max(100, onchainTime - (timeSavedMs || 0));
     
-    const arcTotal = apiPrice + arcGas;
+    const onchainTotal = apiPrice + onchainGas;
     const yellowTotal = apiPrice;
-    const totalSavings = arcTotal - yellowTotal;
-    const savingsPercent = ((totalSavings / arcTotal) * 100).toFixed(1);
-    const speedup = (arcTime / yellowTime).toFixed(1);
+    const totalSavings = onchainTotal - yellowTotal;
+    const savingsPercent = ((totalSavings / onchainTotal) * 100).toFixed(1);
+    const speedup = (onchainTime / yellowTime).toFixed(1);
 
     return (
         <div className="payment-comparison-card">
             <h3 className="comparison-title">💰 Cost Savings Analysis</h3>
             
             <div className="comparison-grid">
-                {/* Arc Network Column */}
-                <div className="comparison-column arc-column">
+                {/* On-Chain Column */}
+                <div className="comparison-column onchain-column">
                     <div className="column-header">
                         <span className="column-icon">🔗</span>
-                        <span className="column-title">Arc Network Only</span>
+                        <span className="column-title">On-Chain Only</span>
                     </div>
                     <div className="cost-breakdown">
                         <div className="cost-item">
@@ -33,15 +33,15 @@ function PaymentComparisonCard({ paymentMethod, apiPrice, gasSaved, timeSavedMs 
                         </div>
                         <div className="cost-item">
                             <span className="cost-label">Gas Fee</span>
-                            <span className="cost-value">${arcGas.toFixed(3)}</span>
+                            <span className="cost-value">${onchainGas.toFixed(3)}</span>
                         </div>
                         <div className="cost-item total">
                             <span className="cost-label">Total Cost</span>
-                            <span className="cost-value">${arcTotal.toFixed(3)}</span>
+                            <span className="cost-value">${onchainTotal.toFixed(3)}</span>
                         </div>
                         <div className="cost-item">
                             <span className="cost-label">Est. Time</span>
-                            <span className="cost-value">~{arcTime}ms</span>
+                            <span className="cost-value">~{onchainTime}ms</span>
                         </div>
                     </div>
                 </div>
@@ -50,7 +50,7 @@ function PaymentComparisonCard({ paymentMethod, apiPrice, gasSaved, timeSavedMs 
                 <div className="comparison-column yellow-column active">
                     <div className="column-header">
                         <span className="column-icon">⚡</span>
-                        <span className="column-title">Yellow + x402</span>
+                        <span className="column-title">Yellow Network</span>
                         <span className="used-badge">Used</span>
                     </div>
                     <div className="cost-breakdown">
@@ -80,7 +80,7 @@ function PaymentComparisonCard({ paymentMethod, apiPrice, gasSaved, timeSavedMs 
                     <span className="savings-icon">💵</span>
                     <div className="savings-content">
                         <span className="savings-label">Gas Saved</span>
-                        <span className="savings-value">${gasSaved || arcGas.toFixed(3)}</span>
+                        <span className="savings-value">${gasSaved || onchainGas.toFixed(3)}</span>
                     </div>
                 </div>
                 <div className="savings-item">
@@ -100,7 +100,7 @@ function PaymentComparisonCard({ paymentMethod, apiPrice, gasSaved, timeSavedMs 
             </div>
 
             <p className="comparison-note">
-                Yellow Network's off-chain state channels enable instant, gasless payments.
+                Yellow Network's state channels enable instant, gasless payments.
                 Agents save on every transaction while maintaining security.
             </p>
         </div>
