@@ -190,27 +190,13 @@ yellowX/
 │   │   ├── arcExecutor.js           # On-chain fallback
 │   │   └── x402Client.js            # x402 client
 │   └── package.json
-│
-└── Documentation
-    ├── README.md         # This file
-    ├── QUICKSTART.md     # 5-minute setup guide
-    ├── IMPLEMENTATION.md # Technical details
-    ├── SUMMARY.md        # Complete feature overview
-    └── YELLOWX_IMPLEMENTATION.md  # Frontend remake details
+
 ```
 
 ---
 
 ## Yellow Network Configuration
 
-### Demo Mode (Default)
-
-yellowX runs in **demo mode** by default — no Yellow Network ClearNode connection required. Perfect for testing and development.
-
-- Simulates off-chain payments
-- Full integration flow
-- Same API, same behavior
-- Ready for production Yellow Network when available
 
 ### Production Mode
 
@@ -222,9 +208,6 @@ YELLOW_CLEARNODE_URL=wss://clearnode.yellownetwork.io
 YELLOW_WALLET_PRIVATE_KEY=0x...
 ```
 
-📖 **Session setup guide:** [YELLOW_SESSION_SETUP.md](./YELLOW_SESSION_SETUP.md)
-
----
 
 ## Testing
 
@@ -302,16 +285,6 @@ All 402 responses include:
 }
 ```
 
----
-
-## Documentation
-
-- **[QUICKSTART.md](./QUICKSTART.md)** — Get started in 5 minutes
-- **[IMPLEMENTATION.md](./IMPLEMENTATION.md)** — Technical implementation details
-- **[SUMMARY.md](./SUMMARY.md)** — Complete feature overview
-- **[YELLOWX_IMPLEMENTATION.md](./YELLOWX_IMPLEMENTATION.md)** — Frontend remake details
-- **[x402.org](https://www.x402.org/)** — x402 Protocol specification
-- **[Yellow Network](https://yellow.com/)** — Learn about Yellow Network
 
 ---
 
@@ -356,16 +329,6 @@ All 402 responses include:
 
 ---
 
-## Contributing
-
-yellowX is open source! Contributions welcome.
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
----
 
 ## License
 
@@ -384,15 +347,4 @@ First x402 implementation on Yellow Network. Demonstrating the future of autonom
 - [x402 Protocol](https://www.x402.org/) — HTTP payment standard
 - [USDC](https://www.circle.com/usdc) — Stable digital currency
 
----
 
-## Support
-
-- **Issues:** [GitHub Issues](https://github.com/ArcAgents/arcent/issues)
-- **Docs:** See documentation links above
-- **x402 Protocol:** [x402.org](https://www.x402.org/)
-- **Yellow Network:** [yellow.com](https://yellow.com/)
-
----
-
-**yellowX** — Where autonomous agents meet instant payments 🚀
