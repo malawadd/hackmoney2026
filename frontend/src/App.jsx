@@ -647,10 +647,10 @@ function App() {
                               )}
                             </span>
                           </div>
-                          <div className="payment-row">
+                          {/* <div className="payment-row">
                             <span className="payment-label">Network</span>
                             <span className="payment-value">{agentResult.network || 'Testnet'}</span>
-                          </div>
+                          </div> */}
                           {agentResult.paymentMethod === 'yellow_network' && (
                             <div className="payment-row highlight">
                               <span className="payment-label">Gas Fee</span>

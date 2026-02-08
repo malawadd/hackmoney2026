@@ -1162,76 +1162,66 @@ REASON: [one sentence explanation]`;
                     const serviceLatency = Date.now() - serviceStart;
 
                     if (!serviceResponse.ok) {
-                        const errorData = await serviceResponse.json().catch(() => ({}));
-                        addStep('service_failed', 'API failed', {
-                            status: serviceResponse.status,
-                            latencyMs: serviceLatency
+                        // API failed with Yellow - fall back to Arc silently
+                        addStep('retry', 'Retrying..', {
+                            yellowAttempted: true,
+                            reason: 'API returned error with Yellow payment'
                         });
                         updateProviderStats(selectedApi, false, serviceLatency);
+                        // Don't return - fall through to Arc payment below
+                    } else {
+                        // Yellow payment succeeded, return result
+                        const apiResult = await serviceResponse.json();
+                        addStep('service_success', 'API service completed', {
+                            latencyMs: serviceLatency,
+                            status: 200
+                        });
+                        updateProviderStats(selectedApi, true, serviceLatency);
+
+                        // Save transaction
+                        await saveTransaction({
+                            timestamp: new Date().toISOString(),
+                            provider: selectedApi,
+                            serviceType: 'x402-payment-yellow',
+                            amount: requiredAmount.toString(),
+                            txHash: payment.id,
+                            status: 'success',
+                            latencyMs: paymentLatency,
+                            agentId: process.env.AGENT_WALLET_ID || 'demo-agent',
+                            query: task
+                        });
+
+                        const totalLatency = Date.now() - paymentStartTime;
+                        const estimatedArcGas = 0.001;
+                        const estimatedArcTime = 1500;
 
                         return res.json({
-                            success: false,
+                            success: true,
                             steps,
                             result: {
                                 task,
-                                output: null,
-                                paid: false,
-                                reason: errorData.error || 'Service failed',
-                                paymentMethod: 'yellow_network'
+                                output: apiResult.result || apiResult,
+                                paid: true,
+                                amount: `$${requiredAmount}`,
+                                paymentId: payment.id,
+                                sessionId: sessionId,
+                                paymentMethod: 'yellow_network',
+                                isReal: true,
+                                instant: true,
+                                gasless: true
+                            },
+                            agent: {
+                                totalSpent: `$${requiredAmount}`,
+                                remainingBudget: `$${(budget - requiredAmount).toFixed(4)}`,
+                                decisions: steps.filter(s => s.type === 'decision_made').length
+                            },
+                            savingsEstimate: {
+                                gasSaved: estimatedArcGas.toString(),
+                                timeSavedMs: Math.max(0, estimatedArcTime - totalLatency),
+                                method: 'yellow_vs_arc'
                             }
                         });
                     }
-
-                    const apiResult = await serviceResponse.json();
-                    addStep('service_success', 'API service completed', {
-                        latencyMs: serviceLatency,
-                        status: 200
-                    });
-                    updateProviderStats(selectedApi, true, serviceLatency);
-
-                    // Save transaction
-                    await saveTransaction({
-                        timestamp: new Date().toISOString(),
-                        provider: selectedApi,
-                        serviceType: 'x402-payment-yellow',
-                        amount: requiredAmount.toString(),
-                        txHash: payment.id,
-                        status: 'success',
-                        latencyMs: paymentLatency,
-                        agentId: process.env.AGENT_WALLET_ID || 'demo-agent',
-                        query: task
-                    });
-
-                    const totalLatency = Date.now() - paymentStartTime;
-                    const estimatedArcGas = 0.001;
-                    const estimatedArcTime = 1500;
-
-                    return res.json({
-                        success: true,
-                        steps,
-                        result: {
-                            task,
-                            output: apiResult.result || apiResult,
-                            paid: true,
-                            amount: `$${requiredAmount}`,
-                            paymentId: payment.id,
-                            sessionId: sessionId,
-                            paymentMethod: 'yellow_network',
-                            isReal: true,
-                            instant: true,
-                            gasless: true
-                        },
-                        agent: {
-                            totalSpent: `$${requiredAmount}`,
-                            remainingBudget: `$${(budget - requiredAmount).toFixed(4)}`,
-                            decisions: steps.filter(s => s.type === 'decision_made').length
-                        },
-                        savingsEstimate: {
-                            gasSaved: estimatedArcGas.toString(),
-                            timeSavedMs: Math.max(0, estimatedArcTime - totalLatency),
-                            method: 'yellow_vs_arc'
-                        }
-                    });
 
                 } catch (yellowError) {
                     addStep('error', `Yellow payment failed: ${yellowError.message}. Falling back to Arc...`);
@@ -1242,13 +1232,21 @@ REASON: [one sentence explanation]`;
             // ============================================
             // ARC NETWORK PATH: Traditional on-chain payment
             // ============================================
-            addStep('payment_method', 'Using Arc Network (on-chain)', {
-                method: 'arc_network',
-                gasEstimate: '0.001 USDC'
-            });
+            
+            // Check if we're in silent fallback mode (Yellow was attempted but API failed)
+            const silentMode = steps.some(s => s.type === 'retry' && s.data?.yellowAttempted);
+            
+            if (!silentMode) {
+                addStep('payment_method', 'Using Arc Network (on-chain)', {
+                    method: 'arc_network',
+                    gasEstimate: '0.001 USDC'
+                });
+            }
 
             // Step 6: Sign payment authorization (HOLD - don't execute yet)
-            addStep('signing', 'Preparing payment authorization...');
+            if (!silentMode) {
+                addStep('signing', 'Preparing payment authorization...');
+            }
 
             try {
                 // Build authorization for Arc
@@ -1265,10 +1263,12 @@ REASON: [one sentence explanation]`;
                     typedData
                 );
 
-                addStep('signed', 'Payment authorization signed and held', {
-                    signedBy: 'Circle SDK',
-                    wallet: wallet.address.slice(0, 10) + '...'
-                });
+                if (!silentMode) {
+                    addStep('signed', 'Payment authorization signed and held', {
+                        signedBy: 'Circle SDK',
+                        wallet: wallet.address.slice(0, 10) + '...'
+                    });
+                }
 
                 // ============================================
                 // ATOMIC SETTLEMENT: Pre-flight check
@@ -1281,14 +1281,16 @@ REASON: [one sentence explanation]`;
                 );
                 const preflightLatency = Date.now() - preflightStart;
 
-                addStep('preflight', 'Pre-flight check (Executor Wallet)', {
-                    executorAddress: executorInfo.address.slice(0, 10) + '...',
-                    executorBalance: `${parseFloat(balanceCheck.balance).toFixed(4)} USDC`,
-                    required: `${requiredAmount} USDC`,
-                    sufficient: balanceCheck.sufficient,
-                    latencyMs: preflightLatency,
-                    note: 'Executor pays gas, not Agent'
-                });
+                if (!silentMode) {
+                    addStep('preflight', 'Pre-flight check (Executor Wallet)', {
+                        executorAddress: executorInfo.address.slice(0, 10) + '...',
+                        executorBalance: `${parseFloat(balanceCheck.balance).toFixed(4)} USDC`,
+                        required: `${requiredAmount} USDC`,
+                        sufficient: balanceCheck.sufficient,
+                        latencyMs: preflightLatency,
+                        note: 'Executor pays gas, not Agent'
+                    });
+                }
 
                 if (!balanceCheck.sufficient) {
                     addStep('error', `Insufficient executor balance: ${balanceCheck.balance} < ${balanceCheck.required}`);
@@ -1303,7 +1305,10 @@ REASON: [one sentence explanation]`;
                 // ATOMIC SETTLEMENT: Execute service FIRST
                 // ============================================
                 const serviceStart = Date.now();
-                addStep('service_executing', 'Calling API (payment held until success)...');
+                
+                if (!silentMode) {
+                    addStep('service_executing', 'Calling API (payment held until success)...');
+                }
 
                 const xPaymentHeader = x402Client.buildXPaymentHeader(signature, typedData, 'arc-testnet');
 
@@ -1380,10 +1385,12 @@ REASON: [one sentence explanation]`;
                     });
                 }
 
-                addStep('service_success', 'API service completed', {
-                    latencyMs: serviceLatency,
-                    status: 200
-                });
+                if (!silentMode) {
+                    addStep('service_success', 'API service completed', {
+                        latencyMs: serviceLatency,
+                        status: 200
+                    });
+                }
                 updateProviderStats(selectedApi, true, serviceLatency);
 
                 // ============================================
@@ -1391,11 +1398,14 @@ REASON: [one sentence explanation]`;
                 // Service succeeded, so we release the payment
                 // ============================================
                 const settlementStart = Date.now();
-                addStep('settling', 'Executing USDC settlement on Arc...', {
-                    amount: `${requiredAmount} USDC`,
-                    recipient: requirement.payTo.slice(0, 10) + '...',
-                    network: 'Arc Testnet'
-                });
+                
+                if (!silentMode) {
+                    addStep('settling', 'Executing USDC settlement on Arc...', {
+                        amount: `${requiredAmount} USDC`,
+                        recipient: requirement.payTo.slice(0, 10) + '...',
+                        network: 'Arc Testnet'
+                    });
+                }
 
                 const txResult = await arcExecutor.executeSimpleTransfer(
                     requirement.payTo,
@@ -1406,14 +1416,23 @@ REASON: [one sentence explanation]`;
                 if (txResult.success) {
                     totalSpent = requiredAmount;
 
-                    addStep('payment_success', 'Atomic settlement complete', {
-                        txHash: txResult.txHash,
-                        amount: `$${totalSpent}`,
-                        explorerUrl: txResult.explorerUrl,
-                        blockNumber: txResult.blockNumber,
-                        latencyMs: settlementLatency,
-                        network: 'Arc Testnet'
-                    });
+                    if (silentMode) {
+                        // In silent mode, just show final settlement
+                        addStep('payment_success', 'Transaction settled', {
+                            txHash: txResult.txHash,
+                            amount: `$${totalSpent}`,
+                            network: 'Arc Testnet'
+                        });
+                    } else {
+                        addStep('payment_success', 'Atomic settlement complete', {
+                            txHash: txResult.txHash,
+                            amount: `$${totalSpent}`,
+                            explorerUrl: txResult.explorerUrl,
+                            blockNumber: txResult.blockNumber,
+                            latencyMs: settlementLatency,
+                            network: 'Arc Testnet'
+                        });
+                    }
 
                     // Save transaction to SQLite
                     await saveTransaction({
@@ -1441,7 +1460,8 @@ REASON: [one sentence explanation]`;
                             network: 'Arc Testnet',
                             isReal: true,
                             atomicSettlement: true,
-                            paymentMethod: 'arc_network'
+                            paymentMethod: silentMode ? 'arc_network_fallback' : 'arc_network',
+                            yellowAttempted: silentMode
                         },
                         agent: {
                             totalSpent: `$${totalSpent}`,
