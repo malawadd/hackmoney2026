@@ -3,6 +3,7 @@ import './App.css'
 import { useWallet } from './hooks/useWallet'
 import YellowNetworkDemo from './components/YellowNetworkDemo'
 import YellowNetworkView from './components/YellowNetworkView';
+import PaymentComparisonCard from './components/PaymentComparisonCard';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -31,6 +32,7 @@ function App() {
   const [agentRunning, setAgentRunning] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState({});
   const [thinkingExpanded, setThinkingExpanded] = useState(false);
+  const [useHybridMode, setUseHybridMode] = useState(true); // Yellow Network preference
 
   // Wallet Connection
   const wallet = useWallet();
@@ -48,12 +50,16 @@ function App() {
   // Spending Limits
   const [spendingLimits, setSpendingLimits] = useState(null);
 
+  // Yellow Network Stats
+  const [yellowStats, setYellowStats] = useState(null);
+
   useEffect(() => {
     fetchApis();
     fetchDemoWallet();
     fetchTransactionHistory();
     fetchProviderStats();
     fetchSpendingLimits();
+    fetchYellowStats();
   }, []);
 
   const fetchProviderStats = async () => {
@@ -65,6 +71,18 @@ function App() {
       }
     } catch (e) {
       console.log('Provider stats not available');
+    }
+  };
+
+  const fetchYellowStats = async () => {
+    try {
+      const res = await fetch(`${API_URL}/yellow/stats`);
+      const data = await res.json();
+      if (data.success) {
+        setYellowStats(data);
+      }
+    } catch (e) {
+      console.log('Yellow stats not available');
     }
   };
 
@@ -661,6 +679,30 @@ function App() {
               </div>
 
               <div className="card-body demo-body">
+                {/* Hybrid Mode Toggle */}
+                <div className="hybrid-mode-section">
+                  <div className="hybrid-toggle-container">
+                    <label className="hybrid-toggle-label">
+                      <input
+                        type="checkbox"
+                        checked={useHybridMode}
+                        onChange={(e) => setUseHybridMode(e.target.checked)}
+                        disabled={agentRunning}
+                      />
+                      <span className="hybrid-toggle-text">
+                        <span className="toggle-icon">⚡</span>
+                        Use Yellow Network when available
+                        <span className="toggle-badge">Instant & Gasless</span>
+                      </span>
+                    </label>
+                    <p className="hybrid-toggle-note">
+                      {useHybridMode 
+                        ? 'Agent will use Yellow Network for instant, zero-gas payments when possible' 
+                        : 'Agent will use Arc Network on-chain payments only'}
+                    </p>
+                  </div>
+                </div>
+
                 <div className="demo-input-section">
                   <label className="demo-label">
                     Give the agent a task that requires an API call
@@ -887,9 +929,29 @@ function App() {
                             <span className="payment-value">{agentResult.amount} USDC</span>
                           </div>
                           <div className="payment-row">
+                            <span className="payment-label">Payment Method</span>
+                            <span className="payment-value">
+                              {agentResult.paymentMethod === 'yellow_network' ? (
+                                <span className="badge badge-yellow">
+                                  ⚡ Yellow Network
+                                </span>
+                              ) : (
+                                <span className="badge badge-arc">
+                                  🔗 Arc Network
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                          <div className="payment-row">
                             <span className="payment-label">Network</span>
                             <span className="payment-value">{agentResult.network || 'Arc Testnet'}</span>
                           </div>
+                          {agentResult.gasless && (
+                            <div className="payment-row highlight">
+                              <span className="payment-label">Gas Fee</span>
+                              <span className="payment-value">$0.000 (Gasless)</span>
+                            </div>
+                          )}
                         </div>
                       )}
 
@@ -913,6 +975,16 @@ function App() {
                   )}
                 </div>
               </div>
+            )}
+
+            {/* Payment Comparison Card - Show when Yellow was used */}
+            {agentResult && agentResult.paymentMethod === 'yellow_network' && agentResult.savingsEstimate && (
+              <PaymentComparisonCard
+                paymentMethod={agentResult.paymentMethod}
+                apiPrice={parseFloat(agentResult.amount?.replace('$', '') || '0')}
+                gasSaved={agentResult.savingsEstimate.gasSaved}
+                timeSavedMs={agentResult.savingsEstimate.timeSavedMs}
+              />
             )}
 
           </div>

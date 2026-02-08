@@ -118,6 +118,34 @@ export function useYellowNetwork(backendUrl = 'http://localhost:3001') {
         }
     }, [backendUrl]);
 
+    // Create session for agent
+    const createSessionForAgent = useCallback(async (agentWalletAddress) => {
+        try {
+            const gatewayAddress = status.wallet || '0x988530a4df2fe4590db57cfb8a6ad831c01c996a';
+            return await createSession(agentWalletAddress, gatewayAddress, '10000000'); // 10 USDC
+        } catch (error) {
+            console.error('Error creating session for agent:', error);
+            throw error;
+        }
+    }, [status.wallet, createSession]);
+
+    // Get Yellow Network stats
+    const getYellowStats = useCallback(async () => {
+        try {
+            const response = await fetch(`${backendUrl}/yellow/stats`);
+            const data = await response.json();
+
+            if (data.success) {
+                return data;
+            } else {
+                throw new Error(data.error || 'Failed to get stats');
+            }
+        } catch (error) {
+            console.error('Error getting Yellow stats:', error);
+            throw error;
+        }
+    }, [backendUrl]);
+
     // Fetch sessions history
     const fetchSessions = useCallback(async () => {
         try {
@@ -160,6 +188,8 @@ export function useYellowNetwork(backendUrl = 'http://localhost:3001') {
         createSession,
         executePayment,
         fetchSessions,
+        createSessionForAgent,
+        getYellowStats,
 
         // Helpers
         isConnected: status.connected,
