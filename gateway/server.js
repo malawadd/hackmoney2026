@@ -114,6 +114,13 @@ const agentYellowSessions = new Map(); // wallet address -> session_id
  * @returns {Promise<string|null>} Session ID or null if Yellow not available
  */
 async function getYellowSessionForAgent(agentAddress) {
+    // Option 1: Use global Yellow session (all agents share)
+    if (process.env.YELLOW_SESSION_ID) {
+        console.log('[Yellow] Using global session:', process.env.YELLOW_SESSION_ID.slice(0, 20) + '...');
+        return process.env.YELLOW_SESSION_ID;
+    }
+    
+    // Option 2: Per-agent sessions (existing logic)
     if (!yellowNetwork.isAvailable()) {
         return null;
     }
@@ -820,7 +827,7 @@ app.get('/agent/wallet', async (req, res) => {
 // =====================
 
 app.post('/agent/x402', async (req, res) => {
-    const { task, budget = 1.0 } = req.body;
+    const { task, budget = 1.0, preferYellow = true } = req.body;
     const steps = [];
     let totalSpent = 0;
 
@@ -995,7 +1002,10 @@ Reason: [one sentence]`;
 
         let response = await fetch(apiUrl, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 
+                'Content-Type': 'application/json',
+                'X-Agent-Address': wallet.address
+            },
             body: JSON.stringify(requestBody)
         });
 
@@ -1071,10 +1081,10 @@ REASON: [one sentence explanation]`;
                 });
             }
 
-            // Step 5: Check if Yellow Network payment is available and recommended
-            const useYellow = paymentInfo.payment_methods?.yellow_network && 
-                             yellowNetwork.isAvailable() &&
-                             paymentInfo.recommended === 'yellow_network';
+            // Step 5: Check if Yellow Network payment is available and preferred
+            const useYellow = preferYellow &&
+                             paymentInfo.payment_methods?.yellow_network && 
+                             yellowNetwork.isAvailable();
 
             let paymentMethod = 'arc_network';
             let paymentStartTime = Date.now();

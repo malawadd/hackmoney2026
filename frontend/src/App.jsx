@@ -208,7 +208,8 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           task: taskToRun,
-          budget: 1.0 // $1 USDC budget for agent
+          budget: 1.0, // $1 USDC budget for agent
+          preferYellow: useHybridMode
         })
       });
 
